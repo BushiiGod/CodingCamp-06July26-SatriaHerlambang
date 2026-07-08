@@ -1,531 +1,519 @@
 /* ============================================================
-   MY DASHBOARD — app.js
-   Vanilla JS | Local Storage | No frameworks
+   EXPENSE & BUDGET VISUALIZER — app.js
+   Vanilla JS | LocalStorage | No frameworks
    ============================================================ */
 
 'use strict';
 
-/* ============================================================
-   SECTION 0 — THEME TOGGLE (light / dark, persisted)
-   ============================================================ */
+/* ── Theme Toggle ──────────────────────────────────────────── */
 (function initTheme() {
-  const btn    = document.getElementById('theme-toggle');
-  const icon   = document.getElementById('theme-icon');
-  const html   = document.documentElement;
-  const STORAGE_KEY = 'dashboard_theme';
+  var btn  = document.getElementById('theme-toggle');
+  var icon = document.getElementById('theme-icon');
+  var html = document.documentElement;
+  var KEY  = 'expense_theme';
 
-  // restore saved preference, default to dark
-  const saved = localStorage.getItem(STORAGE_KEY) || 'dark';
-  applyTheme(saved);
+  var saved = localStorage.getItem(KEY);
+  applyTheme(saved === 'light' ? 'light' : 'dark');
 
   function applyTheme(theme) {
     html.setAttribute('data-theme', theme);
     icon.textContent = theme === 'dark' ? '🌙' : '☀️';
-    localStorage.setItem(STORAGE_KEY, theme);
+    try { localStorage.setItem(KEY, theme); } catch (e) { /* quota */ }
   }
 
-  btn.addEventListener('click', function() {
-    const current = html.getAttribute('data-theme');
-    applyTheme(current === 'dark' ? 'light' : 'dark');
+  btn.addEventListener('click', function () {
+    applyTheme(html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
   });
-})();
+}());
 
-/* ============================================================
-   SECTION 1 — GREETING (time, date, greeting message)
-   ============================================================ */
-(function initGreeting() {
-  const devName = 'Satria Herlambang';
-  const timeEl    = document.getElementById('greeting-time');
-  const textEl    = document.getElementById('greeting-text');
-  const dateEl    = document.getElementById('greeting-date');
 
-  function getGreeting(hour) {
-    if (hour >= 5  && hour < 12) return '🌤 Good Morning!, '+devName;
-    if (hour >= 12 && hour < 17) return '☀️ Good Afternoon!, '+devName;
-    if (hour >= 17 && hour < 21) return '🌆 Good Evening!, '+devName;
-    return '🌙 Good Night!, '+devName;
+/* ── Core App ──────────────────────────────────────────────── */
+(function initApp() {
+
+  /* ── Storage keys ────────────────────────────────────────── */
+  var TX_KEY    = 'expense_transactions';
+  var LIMIT_KEY = 'expense_limit';
+
+  /* ── Category colour palette ─────────────────────────────── */
+  var PALETTE = [
+    '#6c63ff', /* Food      — violet  */
+    '#ff5f6d', /* Transport — coral   */
+    '#43d98f', /* Fun       — mint    */
+    '#f5a623', /* custom 4  — amber   */
+    '#00c6ff', /* custom 5  — sky     */
+    '#ff9ff3', /* custom 6  — pink    */
+    '#54a0ff', /* custom 7  — blue    */
+    '#feca57', /* custom 8  — yellow  */
+    '#48dbfb', /* custom 9  — cyan    */
+    '#1dd1a1', /* custom 10 — teal    */
+    '#ff9f43', /* custom 11 — orange  */
+    '#ff6b81'  /* custom 12 — rose    */
+  ];
+
+  var BUILTIN = ['Food', 'Transport', 'Fun'];
+
+  /* ── State ───────────────────────────────────────────────── */
+  var transactions  = loadJSON(TX_KEY, []);
+  var spendingLimit = loadFloat(LIMIT_KEY, 0);
+  var sortMode      = 'newest';
+
+  /* ── Category → colour map (built-ins pre-assigned) ──────── */
+  var categoryColors = {};
+  var colorIndex     = 0;
+
+  BUILTIN.forEach(function (c) { assignColor(c); });
+
+  function assignColor(cat) {
+    if (!categoryColors[cat]) {
+      categoryColors[cat] = PALETTE[colorIndex % PALETTE.length];
+      colorIndex++;
+    }
+    return categoryColors[cat];
   }
 
-  function update() {
-    const now  = new Date();
-    const h    = now.getHours();
-    const m    = now.getMinutes().toString().padStart(2, '0');
-    const s    = now.getSeconds().toString().padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const h12  = (h % 12) || 12;
+  /* ── Persistence helpers ─────────────────────────────────── */
+  function loadJSON(key, fallback) {
+    try {
+      var v = JSON.parse(localStorage.getItem(key));
+      return Array.isArray(v) ? v : fallback;
+    } catch (e) { return fallback; }
+  }
 
-    timeEl.textContent = `${h12}:${m}:${s} ${ampm}`;
-    textEl.textContent = getGreeting(h);
-    dateEl.textContent = now.toLocaleDateString('en-US', {
-      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  function loadFloat(key, fallback) {
+    var v = parseFloat(localStorage.getItem(key));
+    return isFinite(v) && v >= 0 ? v : fallback;
+  }
+
+  function saveTx() {
+    try { localStorage.setItem(TX_KEY, JSON.stringify(transactions)); } catch (e) { /* quota */ }
+  }
+
+  function saveLimit(val) {
+    try { localStorage.setItem(LIMIT_KEY, val); } catch (e) { /* quota */ }
+  }
+
+  /* ── DOM refs ────────────────────────────────────────────── */
+  var balanceEl        = document.getElementById('total-balance');
+  var limitInputEl     = document.getElementById('limit-input');
+  var limitSetBtn      = document.getElementById('limit-set');
+  var limitClearBtn    = document.getElementById('limit-clear');
+  var limitStatusEl    = document.getElementById('limit-status');
+
+  var itemNameEl       = document.getElementById('item-name');
+  var itemAmountEl     = document.getElementById('item-amount');
+  var itemCategoryEl   = document.getElementById('item-category');
+  var customGroupEl    = document.getElementById('custom-category-group');
+  var customCategoryEl = document.getElementById('custom-category');
+  var addBtn           = document.getElementById('add-btn');
+
+  var errName          = document.getElementById('err-name');
+  var errAmount        = document.getElementById('err-amount');
+  var errCategory      = document.getElementById('err-category');
+  var errCustom        = document.getElementById('err-custom');
+
+  var listEl           = document.getElementById('transaction-list');
+  var txCountEl        = document.getElementById('tx-count');
+  var sortSelectEl     = document.getElementById('sort-select');
+
+  var chartWrapEl      = document.getElementById('chart-wrap');
+  var chartEmptyEl     = document.getElementById('chart-empty');
+  var chartLegendEl    = document.getElementById('chart-legend');
+  var chartCanvas      = document.getElementById('spending-chart');
+
+  /* ── Chart.js ────────────────────────────────────────────── */
+  var pieChart = new Chart(chartCanvas, {
+    type: 'pie',
+    data: {
+      labels: [],
+      datasets: [{
+        data: [],
+        backgroundColor: [],
+        borderWidth: 2,
+        borderColor: 'transparent',
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var val   = ctx.parsed;
+              var total = ctx.dataset.data.reduce(function (a, b) { return a + b; }, 0);
+              var pct   = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0';
+              return ' Rp ' + fmt(val) + ' (' + pct + '%)';
+            }
+          }
+        }
+      }
+    }
+  });
+
+  /* ── Formatting ──────────────────────────────────────────── */
+  function fmt(n) {
+    return Number(n).toLocaleString('id-ID');
+  }
+
+  /* ── Input helpers ───────────────────────────────────────── */
+  function shake(el) {
+    el.classList.remove('input-error');
+    void el.offsetWidth; /* force reflow to replay animation */
+    el.classList.add('input-error');
+    setTimeout(function () { el.classList.remove('input-error'); }, 400);
+  }
+
+  /* For compound wrapper divs (.amount-wrap, .limit-input-wrap) that hold
+     the visible border — shake the wrapper, not the borderless inner input */
+  function shakeWrap(el) {
+    el.classList.remove('wrap-error');
+    void el.offsetWidth;
+    el.classList.add('wrap-error');
+    setTimeout(function () { el.classList.remove('wrap-error'); }, 400);
+  }
+
+  function clearErrors() {
+    [errName, errAmount, errCategory, errCustom].forEach(function (el) {
+      el.textContent = '';
     });
   }
 
-  update();
-  setInterval(update, 1000);
-})();
-
-
-/* ============================================================
-   SECTION 2 — FOCUS TIMER (configurable Pomodoro)
-   ============================================================ */
-(function initTimer() {
-  const DEFAULT_MINUTES = 25;
-
-  const displayEl  = document.getElementById('timer-display');
-  const statusEl   = document.getElementById('timer-status');
-  const btnStart   = document.getElementById('timer-start');
-  const btnStop    = document.getElementById('timer-stop');
-  const btnReset   = document.getElementById('timer-reset');
-  const btnSet     = document.getElementById('timer-set');
-  const minutesInput = document.getElementById('timer-minutes');
-
-  let totalSeconds = DEFAULT_MINUTES * 60;
-  let remaining    = totalSeconds;
-  let intervalId   = null;
-  let running      = false;
-
-  function render() {
-    const m = Math.floor(remaining / 60).toString().padStart(2, '0');
-    const s = (remaining % 60).toString().padStart(2, '0');
-    displayEl.textContent = `${m}:${s}`;
-    displayEl.classList.toggle('running',  running && remaining > 0);
-    displayEl.classList.toggle('finished', remaining === 0);
+  /* ── Balance ─────────────────────────────────────────────── */
+  function totalSpending() {
+    return transactions.reduce(function (sum, t) { return sum + t.amount; }, 0);
   }
 
-  function tick() {
-    remaining--;
-    if (remaining <= 0) {
-      remaining = 0;
-      clearInterval(intervalId);
-      intervalId = null;
-      running = false;
-      statusEl.textContent = '🎉 Session complete! Take a break.';
+  function updateBalance() {
+    var total = totalSpending();
+    balanceEl.textContent = 'Rp ' + fmt(total);
+
+    if (spendingLimit > 0) {
+      var pct = (total / spendingLimit) * 100;
+      if (pct >= 100) {
+        balanceEl.classList.add('over-limit');
+        limitStatusEl.textContent  = '⚠️ Over limit!';
+        limitStatusEl.className    = 'limit-status danger';
+      } else if (pct >= 80) {
+        balanceEl.classList.remove('over-limit');
+        limitStatusEl.textContent  = '⚠️ ' + pct.toFixed(0) + '% of limit used';
+        limitStatusEl.className    = 'limit-status warn';
+      } else {
+        balanceEl.classList.remove('over-limit');
+        limitStatusEl.textContent  = '✓ ' + pct.toFixed(0) + '% of limit used';
+        limitStatusEl.className    = 'limit-status ok';
+      }
+    } else {
+      balanceEl.classList.remove('over-limit');
+      limitStatusEl.textContent = '';
+      limitStatusEl.className   = 'limit-status';
     }
-    render();
   }
 
-  function start() {
-    if (running || remaining <= 0) return;
-    running    = true;
-    intervalId = setInterval(tick, 1000);
-    statusEl.textContent = '⏱ Focusing…';
-    render();
-  }
-
-  function stop() {
-    if (!running) return;
-    clearInterval(intervalId);
-    intervalId = null;
-    running = false;
-    statusEl.textContent = 'Paused — resume when ready';
-    render();
-  }
-
-  function reset() {
-    clearInterval(intervalId);
-    intervalId = null;
-    running   = false;
-    remaining = totalSeconds;
-    statusEl.textContent = 'Ready to focus';
-    render();
-  }
-
-  function setDuration() {
-    const mins = parseInt(minutesInput.value, 10);
-    if (isNaN(mins) || mins < 1 || mins > 120) {
-      // force animation replay by removing then re-adding the class
-      minutesInput.classList.remove('input-error');
-      void minutesInput.offsetWidth; // reflow
-      minutesInput.classList.add('input-error');
-      setTimeout(function() { minutesInput.classList.remove('input-error'); }, 400);
-      statusEl.textContent = 'Enter a number between 1 and 120.';
+  /* ── Spending limit actions ──────────────────────────────── */
+  function setLimit() {
+    var raw = limitInputEl.value.trim();
+    var val = parseFloat(raw);
+    if (!raw || !isFinite(val) || val < 0) {
+      shakeWrap(document.querySelector('.limit-input-wrap'));
       return;
     }
-    clearInterval(intervalId);
-    intervalId   = null;
-    running      = false;
-    totalSeconds = mins * 60;
-    remaining    = totalSeconds;
-    statusEl.textContent = `Timer set to ${mins} min — ready to focus`;
-    render();
+    spendingLimit = val;
+    saveLimit(val);
+    renderAll();
   }
 
-  btnStart.addEventListener('click', start);
-  btnStop.addEventListener('click', stop);
-  btnReset.addEventListener('click', reset);
-  btnSet.addEventListener('click', setDuration);
-
-  minutesInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') setDuration();
-  });
-
-  render();
-})();
-
-
-/* ============================================================
-   SECTION 3 — TO-DO LIST (add, edit, complete, delete, persist)
-   ============================================================ */
-(function initTodo() {
-  const STORAGE_KEY = 'dashboard_todos';
-
-  const listEl    = document.getElementById('todo-list');
-  const inputEl   = document.getElementById('todo-input');
-  const addBtn    = document.getElementById('todo-add');
-  const modal     = document.getElementById('edit-modal');
-  const editInput = document.getElementById('edit-input');
-  const editSave  = document.getElementById('edit-save');
-  const editCancel= document.getElementById('edit-cancel');
-
-  let todos = load();
-  let editingId = null;
-  let dupMsgTimer = null;
-  const SORT_MODES = ['default', 'az', 'za', 'done-last'];
-  const SORT_LABELS = {
-    'default':   { icon: '⇅',  label: 'Sort' },
-    'az':        { icon: 'A→Z', label: 'A→Z' },
-    'za':        { icon: 'Z→A', label: 'Z→A' },
-    'done-last': { icon: '✓↓',  label: 'Done Last' },
-  };
-  let sortMode = 'default';
-
-  /* -- persistence -- */
-  function load() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    } catch { return []; }
+  function clearLimit() {
+    spendingLimit = 0;
+    limitInputEl.value = '';
+    saveLimit(0);
+    renderAll();
   }
 
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(todos));
-  }
+  /* ── Chart ───────────────────────────────────────────────── */
+  function updateChart() {
+    /* aggregate by category */
+    var totals = {};
+    transactions.forEach(function (t) {
+      totals[t.category] = (totals[t.category] || 0) + t.amount;
+    });
 
-  /* -- render -- */
-  function getSorted() {
-    const copy = todos.slice();
-    if (sortMode === 'az')        return copy.sort(function(a, b) { return a.text.localeCompare(b.text); });
-    if (sortMode === 'za')        return copy.sort(function(a, b) { return b.text.localeCompare(a.text); });
-    if (sortMode === 'done-last') return copy.sort(function(a, b) { return Number(b.done) - Number(a.done); });
-    return copy; // default: insertion order
-  }
+    var labels = Object.keys(totals);
+    var data   = labels.map(function (l) { return totals[l]; });
+    var colors = labels.map(function (l) { return assignColor(l); });
 
-  function updateSortBtn() {
-    const sortBtn   = document.getElementById('todo-sort');
-    const iconEl    = document.getElementById('todo-sort-icon');
-    const labelEl   = document.getElementById('todo-sort-label');
-    const info      = SORT_LABELS[sortMode];
-    iconEl.textContent  = info.icon;
-    labelEl.textContent = info.label;
-    if (sortMode === 'default') {
-      sortBtn.classList.remove('btn-sort-active');
+    if (labels.length === 0) {
+      chartWrapEl.classList.add('hidden');
+      chartEmptyEl.classList.remove('hidden');
     } else {
-      sortBtn.classList.add('btn-sort-active');
+      chartWrapEl.classList.remove('hidden');
+      chartEmptyEl.classList.add('hidden');
+    }
+
+    pieChart.data.labels                      = labels;
+    pieChart.data.datasets[0].data            = data;
+    pieChart.data.datasets[0].backgroundColor = colors;
+    pieChart.update();
+
+    /* custom legend */
+    chartLegendEl.innerHTML = '';
+    labels.forEach(function (label, i) {
+      var item = document.createElement('div');
+      item.className = 'legend-item';
+
+      var dot = document.createElement('span');
+      dot.className        = 'legend-dot';
+      dot.style.background = colors[i];
+      dot.setAttribute('aria-hidden', 'true');
+
+      var txt = document.createElement('span');
+      txt.textContent = label + ' — Rp ' + fmt(data[i]);
+
+      item.appendChild(dot);
+      item.appendChild(txt);
+      chartLegendEl.appendChild(item);
+    });
+  }
+
+  /* ── Sort ────────────────────────────────────────────────── */
+  function getSorted() {
+    var copy = transactions.slice();
+    switch (sortMode) {
+      case 'oldest':      return copy.sort(function (a, b) { return a.id - b.id; });
+      case 'amount-desc': return copy.sort(function (a, b) { return b.amount - a.amount; });
+      case 'amount-asc':  return copy.sort(function (a, b) { return a.amount - b.amount; });
+      case 'category-az': return copy.sort(function (a, b) { return a.category.localeCompare(b.category); });
+      case 'category-za': return copy.sort(function (a, b) { return b.category.localeCompare(a.category); });
+      default:            return copy.sort(function (a, b) { return b.id - a.id; }); /* newest */
     }
   }
 
-  function render() {
+  /* ── Transaction list ────────────────────────────────────── */
+  function renderList() {
     listEl.innerHTML = '';
 
-    if (todos.length === 0) {
-      listEl.innerHTML = '<p class="todo-empty">No tasks yet — add one above!</p>';
-      updateSortBtn();
+    /* transaction count badge */
+    if (transactions.length === 0) {
+      txCountEl.textContent = '';
+    } else {
+      txCountEl.textContent = transactions.length + (transactions.length === 1 ? ' item' : ' items');
+    }
+
+    if (transactions.length === 0) {
+      var empty = document.createElement('div');
+      empty.className = 'list-empty';
+      
+      var emptyIcon = document.createElement('span');
+      emptyIcon.textContent = '🧾';
+      
+      var emptyText = document.createElement('p');
+      emptyText.textContent = 'No transactions yet — add one above!';
+      
+      empty.appendChild(emptyIcon);
+      empty.appendChild(emptyText);
+      listEl.appendChild(empty);
       return;
     }
 
-    const sorted = getSorted();
+    getSorted().forEach(function (tx) {
+      var isOver = spendingLimit > 0 && tx.amount > spendingLimit;
+      var color  = assignColor(tx.category);
 
-    sorted.forEach(function(todo) {
-      const li = document.createElement('li');
-      li.className = 'todo-item' + (todo.done ? ' done' : '');
-      li.dataset.id = todo.id;
+      var row = document.createElement('div');
+      row.className = 'tx-item' + (isOver ? ' over-limit' : '');
+      row.setAttribute('role', 'listitem');
 
-      // check button
-      const checkBtn = document.createElement('button');
-      checkBtn.className = 'todo-check' + (todo.done ? ' checked' : '');
-      checkBtn.setAttribute('aria-label', todo.done ? 'Mark incomplete' : 'Mark complete');
-      checkBtn.addEventListener('click', function() { toggleDone(todo.id); });
+      /* colour dot */
+      var dot = document.createElement('span');
+      dot.className        = 'tx-category-dot';
+      dot.style.background = color;
+      dot.setAttribute('aria-hidden', 'true');
 
-      // text
-      const span = document.createElement('span');
-      span.className = 'todo-text';
-      span.textContent = todo.text;
+      /* item name */
+      var nameEl = document.createElement('span');
+      nameEl.className   = 'tx-name';
+      nameEl.textContent = tx.name;
 
-      // actions
-      const actions = document.createElement('div');
-      actions.className = 'todo-actions';
+      /* right-side meta */
+      var meta = document.createElement('div');
+      meta.className = 'tx-meta';
 
-      const editBtn = document.createElement('button');
-      editBtn.className = 'btn btn-ghost btn-icon';
-      editBtn.textContent = '✏️';
-      editBtn.setAttribute('aria-label', 'Edit task');
-      editBtn.addEventListener('click', function() { openEdit(todo.id); });
+      var amtEl = document.createElement('span');
+      amtEl.className   = 'tx-amount';
+      amtEl.textContent = 'Rp ' + fmt(tx.amount);
 
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn btn-ghost btn-icon';
-      delBtn.textContent = '🗑';
-      delBtn.setAttribute('aria-label', 'Delete task');
-      delBtn.addEventListener('click', function() { deleteTodo(todo.id); });
+      var tagEl = document.createElement('span');
+      tagEl.className   = 'tx-category-tag';
+      tagEl.textContent = tx.category;
 
-      actions.appendChild(editBtn);
-      actions.appendChild(delBtn);
-      li.appendChild(checkBtn);
-      li.appendChild(span);
-      li.appendChild(actions);
-      listEl.appendChild(li);
-    });
-    updateSortBtn();
-  }
+      meta.appendChild(amtEl);
+      meta.appendChild(tagEl);
 
-  /* -- actions -- */
-  function addTodo() {
-    const text = inputEl.value.trim();
-    if (!text) return;
-
-    // duplicate check (case-insensitive)
-    const isDuplicate = todos.some(function(t) {
-      return t.text.toLowerCase() === text.toLowerCase();
-    });
-
-    if (isDuplicate) {
-      // force animation replay
-      inputEl.classList.remove('input-error');
-      void inputEl.offsetWidth; // reflow
-      inputEl.classList.add('input-error');
-      setTimeout(function() { inputEl.classList.remove('input-error'); }, 400);
-
-      // show/update warning message, cancel any pending clear
-      let msg = document.getElementById('todo-dup-msg');
-      if (!msg) {
-        msg = document.createElement('p');
-        msg.id = 'todo-dup-msg';
-        msg.className = 'todo-duplicate-msg';
-        inputEl.parentNode.insertAdjacentElement('afterend', msg);
+      if (isOver) {
+        var badge = document.createElement('span');
+        badge.className   = 'tx-over-badge';
+        badge.textContent = '⚠️ Over limit';
+        meta.appendChild(badge);
       }
-      msg.textContent = '⚠️ "' + text + '" is already in your list.';
-      if (dupMsgTimer) clearTimeout(dupMsgTimer);
-      dupMsgTimer = setTimeout(function() { if (msg) msg.textContent = ''; dupMsgTimer = null; }, 2500);
-      return;
-    }
 
-    // clear any existing duplicate message
-    const existingMsg = document.getElementById('todo-dup-msg');
-    if (existingMsg) existingMsg.textContent = '';
+      /* delete button */
+      var delBtn = document.createElement('button');
+      delBtn.className = 'tx-delete';
+      delBtn.setAttribute('aria-label', 'Delete transaction: ' + tx.name);
+      delBtn.textContent = '🗑';
+      delBtn.addEventListener('click', function () { deleteTransaction(tx.id); });
 
-    todos.push({ id: Date.now(), text: text, done: false });
-    inputEl.value = '';
-    save();
-    render();
-  }
-
-  function toggleDone(id) {
-    todos = todos.map(function(t) {
-      return t.id === id ? Object.assign({}, t, { done: !t.done }) : t;
-    });
-    save();
-    render();
-  }
-
-  function deleteTodo(id) {
-    todos = todos.filter(function(t) { return t.id !== id; });
-    save();
-    render();
-  }
-
-  function openEdit(id) {
-    const todo = todos.find(function(t) { return t.id === id; });
-    if (!todo) return;
-    editingId = id;
-    editInput.value = todo.text;
-    modal.classList.remove('hidden');
-    editInput.focus();
-  }
-
-  function closeEdit() {
-    editingId = null;
-    modal.classList.add('hidden');
-  }
-
-  function saveEdit() {
-    const text = editInput.value.trim();
-    if (!text || editingId === null) return;
-
-    // duplicate check — ignore the task being edited itself
-    const isDuplicate = todos.some(function(t) {
-      return t.id !== editingId && t.text.toLowerCase() === text.toLowerCase();
-    });
-
-    if (isDuplicate) {
-      editInput.classList.remove('input-error');
-      void editInput.offsetWidth; // reflow
-      editInput.classList.add('input-error');
-      setTimeout(function() { editInput.classList.remove('input-error'); }, 400);
-      return;
-    }
-
-    todos = todos.map(function(t) {
-      return t.id === editingId ? Object.assign({}, t, { text: text }) : t;
-    });
-    save();
-    render();
-    closeEdit();
-  }
-
-  /* -- events -- */
-  addBtn.addEventListener('click', addTodo);
-
-  inputEl.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') addTodo();
-  });
-
-  document.getElementById('todo-sort').addEventListener('click', function() {
-    const idx = SORT_MODES.indexOf(sortMode);
-    sortMode  = SORT_MODES[(idx + 1) % SORT_MODES.length];
-    render();
-  });
-
-  editSave.addEventListener('click', saveEdit);
-  editCancel.addEventListener('click', closeEdit);
-
-  editInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') saveEdit();
-    if (e.key === 'Escape') closeEdit();
-  });
-
-  // close modal on backdrop click
-  modal.addEventListener('click', function(e) {
-    if (e.target === modal) closeEdit();
-  });
-
-  render();
-})();
-
-
-/* ============================================================
-   SECTION 4 — QUICK LINKS (add, open, delete, persist)
-   ============================================================ */
-(function initLinks() {
-  const STORAGE_KEY = 'dashboard_links';
-
-  const gridEl    = document.getElementById('links-grid');
-  const nameInput = document.getElementById('link-name-input');
-  const urlInput  = document.getElementById('link-url-input');
-  const addBtn    = document.getElementById('link-add');
-
-  let links = load();
-
-  /* -- persistence -- */
-  function load() {
-    try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-    } catch { return []; }
-  }
-
-  function save() {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(links));
-  }
-
-  /* -- render -- */
-  function render() {
-    gridEl.innerHTML = '';
-
-    if (links.length === 0) {
-      gridEl.innerHTML = '<p class="links-empty">No links yet — add your favorites above!</p>';
-      return;
-    }
-
-    links.forEach(function(link) {
-      // chip wrapper (anchor)
-      const anchor = document.createElement('a');
-      anchor.className = 'link-chip';
-      anchor.href = link.url;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-
-      // favicon
-      const favicon = document.createElement('img');
-      const domain = (function() {
-        try { return new URL(link.url).hostname; } catch { return ''; }
-      })();
-      favicon.src = domain ? `https://www.google.com/s2/favicons?sz=16&domain=${domain}` : '';
-      favicon.alt = '';
-      favicon.width = 16;
-      favicon.height = 16;
-      favicon.style.flexShrink = '0';
-      favicon.onerror = function() { favicon.style.display = 'none'; };
-
-      // label
-      const label = document.createElement('span');
-      label.className = 'link-chip-label';
-      label.textContent = link.name;
-
-      // delete button (stop propagation so anchor doesn't open)
-      const delBtn = document.createElement('button');
-      delBtn.className = 'link-chip-delete';
-      delBtn.textContent = '✕';
-      delBtn.setAttribute('aria-label', 'Remove ' + link.name);
-      delBtn.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        deleteLink(link.id);
-      });
-
-      anchor.appendChild(favicon);
-      anchor.appendChild(label);
-      anchor.appendChild(delBtn);
-      gridEl.appendChild(anchor);
+      row.appendChild(dot);
+      row.appendChild(nameEl);
+      row.appendChild(meta);
+      row.appendChild(delBtn);
+      listEl.appendChild(row);
     });
   }
 
-  function shakeInput(el) {
-    el.classList.remove('input-error');
-    void el.offsetWidth; // reflow to replay animation
-    el.classList.add('input-error');
-    setTimeout(function() { el.classList.remove('input-error'); }, 400);
+  /* ── Full re-render ──────────────────────────────────────── */
+  function renderAll() {
+    updateBalance();
+    updateChart();
+    renderList();
   }
 
-  /* -- actions -- */
-  function addLink() {
-    const name = nameInput.value.trim();
-    let url    = urlInput.value.trim();
+  /* ── Add transaction ─────────────────────────────────────── */
+  function addTransaction() {
+    clearErrors();
 
-    if (!name) { shakeInput(nameInput); return; }
-    if (!url)  { shakeInput(urlInput);  return; }
+    var name    = itemNameEl.value.trim();
+    var amtRaw  = itemAmountEl.value.trim();
+    var amount  = parseFloat(amtRaw);
+    var catSel  = itemCategoryEl.value;
+    var custom  = customCategoryEl.value.trim();
+    var valid   = true;
 
-    // auto-prepend https:// if missing
-    if (!/^https?:\/\//i.test(url)) {
-      url = 'https://' + url;
+    if (!name) {
+      errName.textContent = 'Item name is required.';
+      shake(itemNameEl);
+      valid = false;
     }
 
-    // basic URL validation
-    try { new URL(url); } catch {
-      shakeInput(urlInput);
-      return;
+    if (!amtRaw || !isFinite(amount) || amount <= 0) {
+      errAmount.textContent = 'Enter a valid amount greater than 0.';
+      shakeWrap(document.querySelector('.amount-wrap'));
+      valid = false;
     }
 
-    links.push({ id: Date.now(), name: name, url: url });
-    nameInput.value = '';
-    urlInput.value  = '';
-    save();
-    render();
+    if (!catSel) {
+      errCategory.textContent = 'Please select a category.';
+      shake(itemCategoryEl);
+      valid = false;
+    }
+
+    /* resolve final category — default to catSel, override if Custom */
+    var category = catSel;
+    if (catSel === 'Custom') {
+      if (!custom) {
+        errCustom.textContent = 'Enter your custom category name.';
+        shake(customCategoryEl);
+        valid = false;
+        category = ''; /* not yet resolved */
+      } else {
+        category = custom;
+      }
+    }
+
+    if (!valid) return;
+
+    /* persist new custom category option for session reuse */
+    if (catSel === 'Custom') {
+      addCategoryOption(category);
+    }
+
+    transactions.push({ id: Date.now(), name: name, amount: amount, category: category });
+    saveTx();
+
+    /* reset form */
+    itemNameEl.value       = '';
+    itemAmountEl.value     = '';
+    itemCategoryEl.value   = '';
+    customCategoryEl.value = '';
+    customGroupEl.classList.add('hidden');
+    itemNameEl.focus();
+
+    renderAll();
   }
 
-  function deleteLink(id) {
-    links = links.filter(function(l) { return l.id !== id; });
-    save();
-    render();
+  /* ── Delete transaction ──────────────────────────────────── */
+  function deleteTransaction(id) {
+    transactions = transactions.filter(function (t) { return t.id !== id; });
+    saveTx();
+    renderAll();
   }
 
-  /* -- events -- */
-  addBtn.addEventListener('click', addLink);
+  /* ── Custom category helpers ─────────────────────────────── */
+  function addCategoryOption(name) {
+    var opts = itemCategoryEl.options;
+    for (var i = 0; i < opts.length; i++) {
+      if (opts[i].value === name) return; /* already present */
+    }
+    var opt = document.createElement('option');
+    opt.value       = name;
+    opt.textContent = '🏷️ ' + name;
+    /* insert before the "Custom…" sentinel */
+    var sentinel = itemCategoryEl.querySelector('option[value="Custom"]');
+    itemCategoryEl.insertBefore(opt, sentinel);
+  }
 
-  urlInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') addLink();
+  function restoreCustomCategories() {
+    var seen = {};
+    BUILTIN.forEach(function (c) { seen[c] = true; });
+    seen['Custom'] = true;
+    transactions.forEach(function (t) {
+      if (!seen[t.category]) {
+        addCategoryOption(t.category);
+        seen[t.category] = true;
+      }
+    });
+  }
+
+  /* ── Events ──────────────────────────────────────────────── */
+  addBtn.addEventListener('click', addTransaction);
+
+  itemNameEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') addTransaction();
+  });
+  itemAmountEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') addTransaction();
   });
 
-  nameInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') urlInput.focus();
+  itemCategoryEl.addEventListener('change', function () {
+    if (itemCategoryEl.value === 'Custom') {
+      customGroupEl.classList.remove('hidden');
+      customCategoryEl.focus();
+    } else {
+      customGroupEl.classList.add('hidden');
+      customCategoryEl.value = '';
+      errCustom.textContent  = '';
+    }
   });
 
-  render();
-})();
+  sortSelectEl.addEventListener('change', function () {
+    sortMode = sortSelectEl.value;
+    renderList();
+  });
+
+  limitSetBtn.addEventListener('click', setLimit);
+  limitInputEl.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') setLimit();
+  });
+
+  limitClearBtn.addEventListener('click', clearLimit);
+
+  /* ── Initialise ──────────────────────────────────────────── */
+  if (spendingLimit > 0) {
+    limitInputEl.value = spendingLimit;
+  }
+
+  restoreCustomCategories();
+  renderAll();
+
+}());
